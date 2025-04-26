@@ -1,716 +1,692 @@
+import * as z from 'zod';
 
-// Common validation patterns
-export const VALIDATION_PATTERNS = {
-  TEXT_ONLY: /^[a-zA-Z\s\-.,]*$/,
-  NUMBER_ONLY: /^\d+(\.\d+)?$/,
-  INTEGER_ONLY: /^\d+$/,
-  LATITUDE: /^([0-8]?[0-9](\.\d+)?|90(\.0+)?)$/,
-  LONGITUDE: /^((1?[0-7]?|[0-9]?)[0-9](\.\d+)?|180(\.0+)?)$/,
-  TIME_ZONE: /^[+-]?([0-9]|1[0-2])$/
-};
+// Common validation patterns (can be removed later if Zod handles all cases)
+// export const VALIDATION_PATTERNS = { ... };
 
-// Form field validation rule
-export interface ValidationRule {
-  required?: boolean;
-  min?: number;
-  max?: number;
-  pattern?: RegExp;
-  custom?: (value: string) => boolean;
-  errorMessage: string;
-}
+// Form field validation rule (OLD - can be removed after refactor)
+// export interface ValidationRule { ... };
 
-// Map of field names to validation rules
-export type ValidationRules = {
-  [key: string]: ValidationRule;
-};
+// Map of field names to validation rules (OLD - can be removed after refactor)
+// export type ValidationRules = { ... };
 
-// Departure Report Form data interface
-export interface DepartureReportFormData {
+// Departure Report Form data interface (OLD - Zod schema will infer the type)
+/*
+export interface DepartureReportFormData { ... }
+*/
+
+// --- Zod Schema Definition ---
+
+// Helper Schemas for common patterns
+
+// Required string: Must not be empty
+const requiredString = z.string().min(1, { message: "This field is required" });
+
+// Preprocessor for optional fields: Convert empty string to undefined
+const preprocessOptionalString = (val: unknown) => (val === '' ? undefined : val);
+
+// Main Zod Schema for Departure Report
+export const departureReportSchema = z.object({
   // General Information
-  date: string;
-  timeZone: string;
-  cargoType: string;
-  cargoQuantity: string;
-  fwdDraft: string;
-  aftDraft: string;
-  departurePort: string;
-  destinationPort: string;
-  
+  date: requiredString, // Assuming HTML date input provides YYYY-MM-DD
+  timeZone: z.string().regex(/^[+-](0\d|1[0-4])$/, { message: "Time zone must be like +03 or -10" }),
+  cargoType: requiredString.regex(/^[a-zA-Z\s\-.,]*$/, { message: 'Invalid characters in Cargo Type' }),
+  cargoQuantity: z.coerce.number({
+    required_error: "Cargo quantity is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  fwdDraft: z.coerce.number({
+    required_error: "Forward draft is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" })
+    .max(30, { message: 'Draft must be between 0 and 30' }),
+
+  aftDraft: z.coerce.number({
+    required_error: "Aft draft is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" })
+    .max(30, { message: 'Draft must be between 0 and 30' }),
+
+  departurePort: requiredString.regex(/^[a-zA-Z\s\-.,]*$/, { message: 'Invalid characters in Departure Port' }),
+  destinationPort: requiredString.regex(/^[a-zA-Z\s\-.,]*$/, { message: 'Invalid characters in Destination Port' }),
+
   // Voyage Information
-  etaDate: string;
-  etaTime: string;
-  cargoStatus: 'loaded' | 'ballast';
-  
+  etaDate: requiredString, // Assuming HTML date input
+  etaTime: requiredString, // Assuming HTML time input HH:MM
+  cargoStatus: z.enum(['loaded', 'ballast'], { errorMap: () => ({ message: 'Cargo status is required' }) }),
+
   // Navigation Data - FASP
-  faspDate: string;
-  faspTime: string;
-  faspLatitude: string;
-  faspLatitudeDir: 'N' | 'S';
-  faspLongitude: string;
-  faspLongitudeDir: 'E' | 'W';
-  faspCourse: string;
-  
+  faspDate: requiredString,
+  faspTime: requiredString,
+  faspLatitude: z.coerce.number({
+    required_error: "Latitude is required",
+    invalid_type_error: "Must be a number"
+  }).min(0, { message: 'Latitude must be between 0 and 90' })
+    .max(90, { message: 'Latitude must be between 0 and 90' }),
+
+  faspLatitudeDir: z.enum(['N', 'S'], { errorMap: () => ({ message: 'Latitude direction is required' }) }),
+
+  faspLongitude: z.coerce.number({
+    required_error: "Longitude is required",
+    invalid_type_error: "Must be a number"
+  }).min(0, { message: 'Longitude must be between 0 and 180' })
+    .max(180, { message: 'Longitude must be between 0 and 180' }),
+
+  faspLongitudeDir: z.enum(['E', 'W'], { errorMap: () => ({ message: 'Longitude direction is required' }) }),
+
+  faspCourse: z.coerce.number({
+    required_error: "Course is required",
+    invalid_type_error: "Must be a whole number"
+  }).int({ message: "Must be a whole number" })
+    .min(0, { message: 'Course must be between 0 and 359' })
+    .max(359, { message: 'Course must be between 0 and 359' }),
+
   // Harbour Steaming
-  harbourDistance: string;
-  harbourTime: string;
-  
+  harbourDistance: z.coerce.number({
+    required_error: "Harbour distance is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  harbourTime: requiredString, // Assuming HH:MM format
+
   // Voyage Distance
-  voyageDistance: string;
-  
+  voyageDistance: z.coerce.number({ // Input: Planned voyage distance FASP to EOSP
+    required_error: "Voyage distance is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+  totalDistanceTraveled: z.number().optional(), // Display only: Calculated cumulative distance (starts with harbourDistance)
+  distanceToGo: z.number().optional(), // Display only: Calculated remaining sea distance (starts with voyageDistance)
+
+
   // Weather Data
-  windDirection: string;
-  windForce: string;
-  seaDirection: string;
-  seaState: string;
-  swellDirection: string;
-  swellHeight: string;
-  
+  windDirection: requiredString, // Assuming select dropdown has a default "" value
+
+  windForce: z.coerce.number({
+    required_error: "Wind force is required",
+    invalid_type_error: "Must be a whole number"
+  }).int({ message: "Must be a whole number" })
+    .min(0, { message: 'Wind force must be between 0 and 12' })
+    .max(12, { message: 'Wind force must be between 0 and 12' }),
+
+  seaDirection: requiredString, // Assuming select dropdown
+
+  seaState: z.coerce.number({
+    required_error: "Sea state is required",
+    invalid_type_error: "Must be a whole number"
+  }).int({ message: "Must be a whole number" })
+    .min(0, { message: 'Sea state must be between 0 and 9' })
+    .max(9, { message: 'Sea state must be between 0 and 9' }),
+
+  swellDirection: requiredString, // Assuming select dropdown
+
+  swellHeight: z.coerce.number({
+    required_error: "Swell height is required",
+    invalid_type_error: "Must be a whole number"
+  }).int({ message: "Must be a whole number" })
+    .min(0, { message: 'Swell height must be between 0 and 9' })
+    .max(9, { message: 'Swell height must be between 0 and 9' }),
+
   // Remarks
-  captainRemarks: string;
+  captainRemarks: z.string().optional(),
 
   // --- Bunker Section ---
-  prsRpm: string; 
+  prsRpm: z.coerce.number({
+    required_error: "PRS RPM is required",
+    invalid_type_error: "Must be a whole number"
+  }).int({ message: "Must be a whole number" })
+    .positive({ message: "PRS RPM must be positive" }),
+
   // Main Engine Consumption
-  meLSIFO: string;
-  meLSMGO: string;
-  meCYLOIL: string;
-  meMEOIL: string;
-  meAEOIL: string;
+  meLSIFO: z.coerce.number({
+    required_error: "ME LSIFO is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  meLSMGO: z.coerce.number({
+    required_error: "ME LSMGO is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  meCYLOIL: z.coerce.number({
+    required_error: "ME CYL OIL is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  meMEOIL: z.coerce.number({
+    required_error: "ME M/E OIL is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  meAEOIL: z.coerce.number({
+    required_error: "ME A/E OIL is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
   // Boiler Consumption
-  boilerLSIFO: string;
-  boilerLSMGO: string;
+  boilerLSIFO: z.coerce.number({
+    required_error: "Boiler LSIFO is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  boilerLSMGO: z.coerce.number({
+    required_error: "Boiler LSMGO is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
   // Aux Consumption
-  auxLSIFO: string;
-  auxLSMGO: string;
-  // Harbour Consumption
-  harbourLSIFO: string;
-  harbourLSMGO: string;
+  auxLSIFO: z.coerce.number({
+    required_error: "Aux LSIFO is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  auxLSMGO: z.coerce.number({
+    required_error: "Aux LSMGO is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  // Harbour Consumption - REMOVED
+  // harbourLSIFO: z.coerce.number({ ... }),
+  // harbourLSMGO: z.coerce.number({ ... }),
+
   // Bunker Supply (Optional)
-  supplyLSIFO?: string;
-  supplyLSMGO?: string;
-  supplyCYLOIL?: string;
-  supplyMEOIL?: string;
-  supplyAEOIL?: string;
-  supplyVOLOIL?: string;
-  // Bunker ROB (Read Only - will be populated from backend/state)
-  robLSIFO?: string; 
-  robLSMGO?: string;
-  robCYLOIL?: string;
-  robMEOIL?: string;
-  robAEOIL?: string;
-  robVOLOIL?: string;
-   // Steaming Consumption (Read Only - calculated display)
-  steamingLSIFO?: string;
-  steamingLSMGO?: string;
-  steamingCYLOIL?: string;
-  steamingMEOIL?: string;
-  steamingAEOIL?: string;
-  steamingVOLOIL?: string;
+  supplyLSIFO: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  supplyLSMGO: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  supplyCYLOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  supplyMEOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  supplyAEOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  supplyVOLOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  // Initial Bunker ROB (Optional - only for the very first departure report)
+  initialRobLSIFO: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+  initialRobLSMGO: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+  initialRobCYLOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+  initialRobMEOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+  initialRobAEOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+  initialRobVOLOIL: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  // Calculated/Displayed Bunker ROB (Read Only - not part of validation schema for submission, but keep for type)
+  robLSIFO: z.string().optional(),
+  robLSMGO: z.string().optional(),
+  robCYLOIL: z.string().optional(),
+  robMEOIL: z.string().optional(),
+  robAEOIL: z.string().optional(),
+  robVOLOIL: z.string().optional(),
+
+  // Steaming Consumption (Read Only - not part of validation schema)
+  steamingLSIFO: z.string().optional(),
+  steamingLSMGO: z.string().optional(),
+  steamingCYLOIL: z.string().optional(),
+  steamingMEOIL: z.string().optional(),
+  steamingAEOIL: z.string().optional(),
+  steamingVOLOIL: z.string().optional(),
+
   // Bunker Remarks
-  bunkerChiefEngineerRemarks?: string;
+  bunkerChiefEngineerRemarks: z.string().optional(),
 
   // --- Engine/Machinery Section ---
   // Main Engine Parameters
-  engineLoadFOPressure: string;
-  engineLoadLubOilPressure: string;
-  engineLoadFWInletTemp: string;
-  engineLoadLOInletTemp: string;
-  engineLoadScavAirTemp: string;
-  engineLoadTCRPM1: string;
-  engineLoadTCRPM2?: string; // Optional
-  engineLoadTCExhTempIn: string;
-  engineLoadTCExhTempOut: string;
-  engineLoadThrustBearingTemp: string;
-  engineLoadDailyRunHour: string;
-  // Engine Units (Example for 8 units, adjust if needed)
-  engineUnit1ExhaustTemp?: string;
-  engineUnit1UnderPistonAir?: string;
-  engineUnit1PCOOutlet?: string;
-  engineUnit1JCFWOutletTemp?: string;
-  engineUnit2ExhaustTemp?: string;
-  engineUnit2UnderPistonAir?: string;
-  engineUnit2PCOOutlet?: string;
-  engineUnit2JCFWOutletTemp?: string;
-  engineUnit3ExhaustTemp?: string;
-  engineUnit3UnderPistonAir?: string;
-  engineUnit3PCOOutlet?: string;
-  engineUnit3JCFWOutletTemp?: string;
-  engineUnit4ExhaustTemp?: string;
-  engineUnit4UnderPistonAir?: string;
-  engineUnit4PCOOutlet?: string;
-  engineUnit4JCFWOutletTemp?: string;
-  engineUnit5ExhaustTemp?: string;
-  engineUnit5UnderPistonAir?: string;
-  engineUnit5PCOOutlet?: string;
-  engineUnit5JCFWOutletTemp?: string;
-  engineUnit6ExhaustTemp?: string;
-  engineUnit6UnderPistonAir?: string;
-  engineUnit6PCOOutlet?: string;
-  engineUnit6JCFWOutletTemp?: string;
-  engineUnit7ExhaustTemp?: string; // Optional Unit
-  engineUnit7UnderPistonAir?: string; // Optional Unit
-  engineUnit7PCOOutlet?: string; // Optional Unit
-  engineUnit7JCFWOutletTemp?: string; // Optional Unit
-  engineUnit8ExhaustTemp?: string; // Optional Unit
-  engineUnit8UnderPistonAir?: string; // Optional Unit
-  engineUnit8PCOOutlet?: string; // Optional Unit
-  engineUnit8JCFWOutletTemp?: string; // Optional Unit
-  // Auxiliary Engines
-  auxEngineDG1Load?: string; // DG1 Mandatory
-  auxEngineDG1KW?: string;
-  auxEngineDG1FOPress?: string;
-  auxEngineDG1LubOilPress?: string;
-  auxEngineDG1WaterTemp?: string;
-  auxEngineDG1DailyRunHour?: string;
-  auxEngineDG2Load?: string; // Optional
-  auxEngineDG2KW?: string;
-  auxEngineDG2FOPress?: string;
-  auxEngineDG2LubOilPress?: string;
-  auxEngineDG2WaterTemp?: string;
-  auxEngineDG2DailyRunHour?: string;
-  auxEngineDG3Load?: string; // Optional
-  auxEngineDG3KW?: string;
-  auxEngineDG3FOPress?: string;
-  auxEngineDG3LubOilPress?: string;
-  auxEngineDG3WaterTemp?: string;
-  auxEngineDG3DailyRunHour?: string;
-  auxEngineV1Load?: string; // Optional
-  auxEngineV1KW?: string;
-  auxEngineV1FOPress?: string;
-  auxEngineV1LubOilPress?: string;
-  auxEngineV1WaterTemp?: string;
-  auxEngineV1DailyRunHour?: string;
+  engineLoadFOPressure: z.coerce.number({
+    required_error: "FO Pressure is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineLoadLubOilPressure: z.coerce.number({
+    required_error: "Lub Oil Pressure is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineLoadFWInletTemp: z.coerce.number({
+    required_error: "FW Inlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineLoadLOInletTemp: z.coerce.number({
+    required_error: "LO Inlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineLoadScavAirTemp: z.coerce.number({
+    required_error: "Scav Air Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineLoadTCRPM1: z.coerce.number({
+    required_error: "TC RPM #1 is required",
+    invalid_type_error: "Must be a whole number"
+  }).int({ message: "Must be a whole number" })
+    .positive({ message: "TC RPM #1 must be positive" }),
+
+  engineLoadTCRPM2: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a whole number" })
+      .int({ message: "Must be a whole number" })
+      .positive({ message: "TC RPM #2 must be positive" })
+      .optional()
+  ),
+
+  engineLoadTCExhTempIn: z.coerce.number({
+    required_error: "TC Exh Temp In is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineLoadTCExhTempOut: z.coerce.number({
+    required_error: "TC Exh Temp Out is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineLoadThrustBearingTemp: z.coerce.number({
+    required_error: "Thrust Bearing Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineLoadDailyRunHour: z.coerce.number({
+    required_error: "Daily Run Hour is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  // Engine Units (Units 1-6 Required, 7-8 Optional)
+  engineUnit1ExhaustTemp: z.coerce.number({
+    required_error: "Unit 1 Exhaust Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit1UnderPistonAir: z.coerce.number({
+    required_error: "Unit 1 Under Piston Air is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit1PCOOutlet: z.coerce.number({
+    required_error: "Unit 1 PCO Outlet is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit1JCFWOutletTemp: z.coerce.number({
+    required_error: "Unit 1 JCFW Outlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit2ExhaustTemp: z.coerce.number({
+    required_error: "Unit 2 Exhaust Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit2UnderPistonAir: z.coerce.number({
+    required_error: "Unit 2 Under Piston Air is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit2PCOOutlet: z.coerce.number({
+    required_error: "Unit 2 PCO Outlet is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit2JCFWOutletTemp: z.coerce.number({
+    required_error: "Unit 2 JCFW Outlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit3ExhaustTemp: z.coerce.number({
+    required_error: "Unit 3 Exhaust Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit3UnderPistonAir: z.coerce.number({
+    required_error: "Unit 3 Under Piston Air is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit3PCOOutlet: z.coerce.number({
+    required_error: "Unit 3 PCO Outlet is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit3JCFWOutletTemp: z.coerce.number({
+    required_error: "Unit 3 JCFW Outlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit4ExhaustTemp: z.coerce.number({
+    required_error: "Unit 4 Exhaust Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit4UnderPistonAir: z.coerce.number({
+    required_error: "Unit 4 Under Piston Air is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit4PCOOutlet: z.coerce.number({
+    required_error: "Unit 4 PCO Outlet is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit4JCFWOutletTemp: z.coerce.number({
+    required_error: "Unit 4 JCFW Outlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit5ExhaustTemp: z.coerce.number({
+    required_error: "Unit 5 Exhaust Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit5UnderPistonAir: z.coerce.number({
+    required_error: "Unit 5 Under Piston Air is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit5PCOOutlet: z.coerce.number({
+    required_error: "Unit 5 PCO Outlet is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit5JCFWOutletTemp: z.coerce.number({
+    required_error: "Unit 5 JCFW Outlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit6ExhaustTemp: z.coerce.number({
+    required_error: "Unit 6 Exhaust Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  engineUnit6UnderPistonAir: z.coerce.number({
+    required_error: "Unit 6 Under Piston Air is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit6PCOOutlet: z.coerce.number({
+    required_error: "Unit 6 PCO Outlet is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  engineUnit6JCFWOutletTemp: z.coerce.number({
+    required_error: "Unit 6 JCFW Outlet Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  // Optional Units (7-8)
+  engineUnit7ExhaustTemp: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" }).optional()
+  ),
+
+  engineUnit7UnderPistonAir: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  engineUnit7PCOOutlet: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  engineUnit7JCFWOutletTemp: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" }).optional()
+  ),
+
+  engineUnit8ExhaustTemp: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" }).optional()
+  ),
+
+  engineUnit8UnderPistonAir: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  engineUnit8PCOOutlet: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  engineUnit8JCFWOutletTemp: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" }).optional()
+  ),
+
+  // Auxiliary Engines (DG1 Mandatory, others Optional)
+  auxEngineDG1Load: z.coerce.number({
+    required_error: "DG1 Load is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  auxEngineDG1KW: z.coerce.number({
+    required_error: "DG1 KW is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  auxEngineDG1FOPress: z.coerce.number({
+    required_error: "DG1 FO Press is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  auxEngineDG1LubOilPress: z.coerce.number({
+    required_error: "DG1 Lub Oil Press is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  auxEngineDG1WaterTemp: z.coerce.number({
+    required_error: "DG1 Water Temp is required",
+    invalid_type_error: "Must be a number"
+  }),
+
+  auxEngineDG1DailyRunHour: z.coerce.number({
+    required_error: "DG1 Daily Run Hour is required",
+    invalid_type_error: "Must be a number"
+  }).positive({ message: "Must be a positive number" }),
+
+  // Optional Auxiliary Engines (DG2, DG3, V1)
+  auxEngineDG2Load: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG2KW: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG2FOPress: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG2LubOilPress: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG2WaterTemp: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" }).optional()
+  ),
+
+  auxEngineDG2DailyRunHour: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG3Load: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG3KW: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG3FOPress: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG3LubOilPress: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineDG3WaterTemp: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" }).optional()
+  ),
+
+  auxEngineDG3DailyRunHour: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineV1Load: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineV1KW: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineV1FOPress: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineV1LubOilPress: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
+  auxEngineV1WaterTemp: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" }).optional()
+  ),
+
+  auxEngineV1DailyRunHour: z.preprocess(
+    preprocessOptionalString,
+    z.coerce.number({ invalid_type_error: "Must be a number" })
+      .positive({ message: "Must be a positive number" })
+      .optional()
+  ),
+
   // Engine Remarks
-  engineChiefEngineerRemarks?: string;
-}
+  engineChiefEngineerRemarks: z.string().optional(),
+});
 
-// Default values for the form
-export const defaultDepartureValues: DepartureReportFormData = {
-  date: '',
-  timeZone: '',
-  cargoType: '',
-  cargoQuantity: '',
-  fwdDraft: '',
-  aftDraft: '',
-  departurePort: '',
-  destinationPort: '',
-  etaDate: '',
-  etaTime: '',
-  cargoStatus: 'loaded',
-  faspDate: '',
-  faspTime: '',
-  faspLatitude: '',
-  faspLatitudeDir: 'N',
-  faspLongitude: '',
-  faspLongitudeDir: 'E',
-  faspCourse: '',
-  harbourDistance: '',
-  harbourTime: '',
-  voyageDistance: '',
-  windDirection: '',
-  windForce: '',
-  seaDirection: '',
-  seaState: '',
-  swellDirection: '',
-  swellHeight: '',
-  captainRemarks: '',
-  // Bunker Defaults
-  prsRpm: '', 
-  meLSIFO: '',
-  meLSMGO: '',
-  meCYLOIL: '',
-  meMEOIL: '',
-  meAEOIL: '',
-  boilerLSIFO: '',
-  boilerLSMGO: '',
-  auxLSIFO: '',
-  auxLSMGO: '',
-  harbourLSIFO: '',
-  harbourLSMGO: '',
-  supplyLSIFO: '', // Optional defaults to empty
-  supplyLSMGO: '',
-  supplyCYLOIL: '',
-  supplyMEOIL: '',
-  supplyAEOIL: '',
-  supplyVOLOIL: '',
-  // ROB and Steaming are read-only, no default needed in form state usually
-  bunkerChiefEngineerRemarks: '',
-  // Engine/Machinery Defaults
-  engineLoadFOPressure: '',
-  engineLoadLubOilPressure: '',
-  engineLoadFWInletTemp: '',
-  engineLoadLOInletTemp: '',
-  engineLoadScavAirTemp: '',
-  engineLoadTCRPM1: '',
-  engineLoadTCRPM2: '', // Optional
-  engineLoadTCExhTempIn: '',
-  engineLoadTCExhTempOut: '',
-  engineLoadThrustBearingTemp: '',
-  engineLoadDailyRunHour: '',
-  engineUnit1ExhaustTemp: '',
-  engineUnit1UnderPistonAir: '',
-  engineUnit1PCOOutlet: '',
-  engineUnit1JCFWOutletTemp: '',
-  engineUnit2ExhaustTemp: '',
-  engineUnit2UnderPistonAir: '',
-  engineUnit2PCOOutlet: '',
-  engineUnit2JCFWOutletTemp: '',
-  engineUnit3ExhaustTemp: '',
-  engineUnit3UnderPistonAir: '',
-  engineUnit3PCOOutlet: '',
-  engineUnit3JCFWOutletTemp: '',
-  engineUnit4ExhaustTemp: '',
-  engineUnit4UnderPistonAir: '',
-  engineUnit4PCOOutlet: '',
-  engineUnit4JCFWOutletTemp: '',
-  engineUnit5ExhaustTemp: '',
-  engineUnit5UnderPistonAir: '',
-  engineUnit5PCOOutlet: '',
-  engineUnit5JCFWOutletTemp: '',
-  engineUnit6ExhaustTemp: '',
-  engineUnit6UnderPistonAir: '',
-  engineUnit6PCOOutlet: '',
-  engineUnit6JCFWOutletTemp: '',
-  engineUnit7ExhaustTemp: '', // Optional
-  engineUnit7UnderPistonAir: '', // Optional
-  engineUnit7PCOOutlet: '', // Optional
-  engineUnit7JCFWOutletTemp: '', // Optional
-  engineUnit8ExhaustTemp: '', // Optional
-  engineUnit8UnderPistonAir: '', // Optional
-  engineUnit8PCOOutlet: '', // Optional
-  engineUnit8JCFWOutletTemp: '', // Optional
-  auxEngineDG1Load: '', 
-  auxEngineDG1KW: '',
-  auxEngineDG1FOPress: '',
-  auxEngineDG1LubOilPress: '',
-  auxEngineDG1WaterTemp: '',
-  auxEngineDG1DailyRunHour: '',
-  auxEngineDG2Load: '', // Optional
-  auxEngineDG2KW: '',
-  auxEngineDG2FOPress: '',
-  auxEngineDG2LubOilPress: '',
-  auxEngineDG2WaterTemp: '',
-  auxEngineDG2DailyRunHour: '',
-  auxEngineDG3Load: '', // Optional
-  auxEngineDG3KW: '',
-  auxEngineDG3FOPress: '',
-  auxEngineDG3LubOilPress: '',
-  auxEngineDG3WaterTemp: '',
-  auxEngineDG3DailyRunHour: '',
-  auxEngineV1Load: '', // Optional
-  auxEngineV1KW: '',
-  auxEngineV1FOPress: '',
-  auxEngineV1LubOilPress: '',
-  auxEngineV1WaterTemp: '',
-  auxEngineV1DailyRunHour: '',
-  engineChiefEngineerRemarks: ''
-};
+// Inferred type from the schema - This is the type for validated data
+export type ProcessedDepartureFormData = z.infer<typeof departureReportSchema>;
 
-// Validation rules for each field
-export const departureValidationRules: ValidationRules = {
-  date: {
-    required: true,
-    errorMessage: 'Date is required'
-  },
-  timeZone: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.TIME_ZONE,
-    errorMessage: 'Time zone must be between -12 and +12'
-  },
-  cargoType: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.TEXT_ONLY,
-    errorMessage: 'Cargo type must contain only letters and spaces'
-  },
-  cargoQuantity: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Cargo quantity must be a positive number'
-  },
-  fwdDraft: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    max: 30,
-    errorMessage: 'Forward draft must be a number between 0 and 30'
-  },
-  aftDraft: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    max: 30,
-    errorMessage: 'Aft draft must be a number between 0 and 30'
-  },
-  departurePort: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.TEXT_ONLY,
-    errorMessage: 'Departure port must contain only letters and spaces'
-  },
-  destinationPort: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.TEXT_ONLY,
-    errorMessage: 'Destination port must contain only letters and spaces'
-  },
-  etaDate: {
-    required: true,
-    errorMessage: 'ETA date is required'
-  },
-  etaTime: {
-    required: true,
-    errorMessage: 'ETA time is required'
-  },
-  cargoStatus: {
-    required: true,
-    errorMessage: 'Cargo status is required'
-  },
-  faspDate: {
-    required: true,
-    errorMessage: 'FASP date is required'
-  },
-  faspTime: {
-    required: true,
-    errorMessage: 'FASP time is required'
-  },
-  faspLatitude: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    max: 90,
-    errorMessage: 'Latitude must be a number between 0 and 90'
-  },
-  faspLatitudeDir: {
-    required: true,
-    errorMessage: 'Latitude direction is required'
-  },
-  faspLongitude: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    max: 180,
-    errorMessage: 'Longitude must be a number between 0 and 180'
-  },
-  faspLongitudeDir: {
-    required: true,
-    errorMessage: 'Longitude direction is required'
-  },
-  faspCourse: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.INTEGER_ONLY,
-    min: 0,
-    max: 359,
-    errorMessage: 'Course must be a whole number between 0 and 359'
-  },
-  harbourDistance: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Harbour distance must be a positive number'
-  },
-  harbourTime: {
-    required: true,
-    errorMessage: 'Harbour time is required'
-  },
-  voyageDistance: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Voyage distance must be a positive number'
-  },
-  windDirection: {
-    required: true,
-    errorMessage: 'Wind direction is required'
-  },
-  windForce: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.INTEGER_ONLY,
-    min: 0,
-    max: 12,
-    errorMessage: 'Wind force must be a whole number between 0 and 12'
-  },
-  seaDirection: {
-    required: true,
-    errorMessage: 'Sea direction is required'
-  },
-  seaState: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.INTEGER_ONLY,
-    min: 0,
-    max: 9,
-    errorMessage: 'Sea state must be a whole number between 0 and 9'
-  },
-  swellDirection: {
-    required: true,
-    errorMessage: 'Swell direction is required'
-  },
-  swellHeight: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.INTEGER_ONLY,
-    min: 0,
-    max: 9,
-    errorMessage: 'Swell height must be a whole number between 0 and 9'
-  },
-  captainRemarks: {
-    // Optional, no specific rules here unless max length etc. needed
-    required: false, 
-    errorMessage: '' 
-  },
 
-  // --- Bunker Validation Rules ---
-  prsRpm: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.INTEGER_ONLY,
-    min: 0,
-    errorMessage: 'PRS RPM must be a positive whole number'
-  },
-  // Main Engine Consumption
-  meLSIFO: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'ME LSIFO consumption must be a positive number'
-  },
-  meLSMGO: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'ME LSMGO consumption must be a positive number'
-  },
-  meCYLOIL: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'ME CYL OIL consumption must be a positive number'
-  },
-  meMEOIL: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'ME M/E OIL consumption must be a positive number'
-  },
-  meAEOIL: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'ME A/E OIL consumption must be a positive number'
-  },
-  // Boiler Consumption
-  boilerLSIFO: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Boiler LSIFO consumption must be a positive number'
-  },
-  boilerLSMGO: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Boiler LSMGO consumption must be a positive number'
-  },
-  // Aux Consumption
-  auxLSIFO: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Aux LSIFO consumption must be a positive number'
-  },
-  auxLSMGO: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Aux LSMGO consumption must be a positive number'
-  },
-  // Harbour Consumption
-  harbourLSIFO: {
-    required: true, // Mandatory in Departure form
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Harbour LSIFO consumption must be a positive number'
-  },
-  harbourLSMGO: {
-    required: true, // Mandatory in Departure form
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Harbour LSMGO consumption must be a positive number'
-  },
-  // Bunker Supply (Optional fields - only pattern/min validation if value exists)
-  supplyLSIFO: {
-    required: false,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Supply LSIFO must be a positive number if entered'
-  },
-  supplyLSMGO: {
-    required: false,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Supply LSMGO must be a positive number if entered'
-  },
-  supplyCYLOIL: {
-    required: false,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Supply CYL OIL must be a positive number if entered'
-  },
-  supplyMEOIL: {
-    required: false,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Supply M/E OIL must be a positive number if entered'
-  },
-  supplyAEOIL: {
-    required: false,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Supply A/E OIL must be a positive number if entered'
-  },
-  supplyVOLOIL: {
-    required: false,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Supply VOL OIL must be a positive number if entered'
-  },
-   // Bunker ROB fields are read-only, no validation needed from user input
-   // Steaming Consumption fields are read-only, no validation needed
-  bunkerChiefEngineerRemarks: {
-    required: false, 
-    errorMessage: '' 
-  },
-
-  // --- Engine/Machinery Validation Rules ---
-  // Main Engine Parameters
-  engineLoadFOPressure: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'FO Pressure must be a positive number'
-  },
-  engineLoadLubOilPressure: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Lub Oil Pressure must be a positive number'
-  },
-  engineLoadFWInletTemp: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY, // Allow decimals, adjust if integer needed
-    errorMessage: 'FW Inlet Temp must be a number'
-  },
-  engineLoadLOInletTemp: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    errorMessage: 'LO Inlet Temp must be a number'
-  },
-  engineLoadScavAirTemp: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    errorMessage: 'Scavenge Air Temp must be a number'
-  },
-  engineLoadTCRPM1: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.INTEGER_ONLY,
-    min: 0,
-    errorMessage: 'TC RPM #1 must be a positive whole number'
-  },
-  engineLoadTCRPM2: { // Optional
-    required: false,
-    pattern: VALIDATION_PATTERNS.INTEGER_ONLY,
-    min: 0,
-    errorMessage: 'TC RPM #2 must be a positive whole number if entered'
-  },
-  engineLoadTCExhTempIn: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    errorMessage: 'TC Exhaust Temp In must be a number'
-  },
-  engineLoadTCExhTempOut: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    errorMessage: 'TC Exhaust Temp Out must be a number'
-  },
-  engineLoadThrustBearingTemp: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    errorMessage: 'Thrust Bearing Temp must be a number'
-  },
-  engineLoadDailyRunHour: {
-    required: true,
-    pattern: VALIDATION_PATTERNS.NUMBER_ONLY,
-    min: 0,
-    errorMessage: 'Daily Run Hour must be a positive number'
-  },
-  // Engine Units (Mandatory Units 1-6) - Apply similar numeric validation
-  engineUnit1ExhaustTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 1 Exhaust Temp is required' },
-  engineUnit1UnderPistonAir: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 1 Under Piston Air is required' },
-  engineUnit1PCOOutlet: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 1 P.C.O Outlet is required' },
-  engineUnit1JCFWOutletTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 1 J.C.F.W Outlet Temp is required' },
-  engineUnit2ExhaustTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 2 Exhaust Temp is required' },
-  engineUnit2UnderPistonAir: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 2 Under Piston Air is required' },
-  engineUnit2PCOOutlet: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 2 P.C.O Outlet is required' },
-  engineUnit2JCFWOutletTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 2 J.C.F.W Outlet Temp is required' },
-  engineUnit3ExhaustTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 3 Exhaust Temp is required' },
-  engineUnit3UnderPistonAir: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 3 Under Piston Air is required' },
-  engineUnit3PCOOutlet: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 3 P.C.O Outlet is required' },
-  engineUnit3JCFWOutletTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 3 J.C.F.W Outlet Temp is required' },
-  engineUnit4ExhaustTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 4 Exhaust Temp is required' },
-  engineUnit4UnderPistonAir: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 4 Under Piston Air is required' },
-  engineUnit4PCOOutlet: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 4 P.C.O Outlet is required' },
-  engineUnit4JCFWOutletTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 4 J.C.F.W Outlet Temp is required' },
-  engineUnit5ExhaustTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 5 Exhaust Temp is required' },
-  engineUnit5UnderPistonAir: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 5 Under Piston Air is required' },
-  engineUnit5PCOOutlet: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 5 P.C.O Outlet is required' },
-  engineUnit5JCFWOutletTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 5 J.C.F.W Outlet Temp is required' },
-  engineUnit6ExhaustTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 6 Exhaust Temp is required' },
-  engineUnit6UnderPistonAir: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 6 Under Piston Air is required' },
-  engineUnit6PCOOutlet: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 6 P.C.O Outlet is required' },
-  engineUnit6JCFWOutletTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 6 J.C.F.W Outlet Temp is required' },
-  // Engine Units (Optional Units 7-8) - Only validate if entered
-  engineUnit7ExhaustTemp: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 7 Exhaust Temp must be a number if entered' },
-  engineUnit7UnderPistonAir: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 7 Under Piston Air must be a number if entered' },
-  engineUnit7PCOOutlet: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 7 P.C.O Outlet must be a number if entered' },
-  engineUnit7JCFWOutletTemp: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 7 J.C.F.W Outlet Temp must be a number if entered' },
-  engineUnit8ExhaustTemp: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 8 Exhaust Temp must be a number if entered' },
-  engineUnit8UnderPistonAir: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 8 Under Piston Air must be a number if entered' },
-  engineUnit8PCOOutlet: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 8 P.C.O Outlet must be a number if entered' },
-  engineUnit8JCFWOutletTemp: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'Unit 8 J.C.F.W Outlet Temp must be a number if entered' },
-  // Auxiliary Engines (DG1 Mandatory)
-  auxEngineDG1Load: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#1 Load must be a positive number' },
-  auxEngineDG1KW: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#1 KW must be a positive number' },
-  auxEngineDG1FOPress: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#1 FO Press must be a positive number' },
-  auxEngineDG1LubOilPress: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#1 Lub Oil Press must be a positive number' },
-  auxEngineDG1WaterTemp: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'DG#1 Water Temp must be a number' },
-  auxEngineDG1DailyRunHour: { required: true, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#1 Daily Run Hour must be a positive number' },
-  // Auxiliary Engines (Optional - DG2, DG3, V1) - Validate only if entered
-  // We might need custom logic here if enabling one requires others
-  auxEngineDG2Load: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#2 Load must be a positive number if entered' },
-  auxEngineDG2KW: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#2 KW must be a positive number if entered' },
-  auxEngineDG2FOPress: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#2 FO Press must be a positive number if entered' },
-  auxEngineDG2LubOilPress: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#2 Lub Oil Press must be a positive number if entered' },
-  auxEngineDG2WaterTemp: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'DG#2 Water Temp must be a number if entered' },
-  auxEngineDG2DailyRunHour: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#2 Daily Run Hour must be a positive number if entered' },
-  auxEngineDG3Load: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#3 Load must be a positive number if entered' },
-  auxEngineDG3KW: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#3 KW must be a positive number if entered' },
-  auxEngineDG3FOPress: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#3 FO Press must be a positive number if entered' },
-  auxEngineDG3LubOilPress: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#3 Lub Oil Press must be a positive number if entered' },
-  auxEngineDG3WaterTemp: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'DG#3 Water Temp must be a number if entered' },
-  auxEngineDG3DailyRunHour: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'DG#3 Daily Run Hour must be a positive number if entered' },
-  auxEngineV1Load: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'V#1 Load must be a positive number if entered' },
-  auxEngineV1KW: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'V#1 KW must be a positive number if entered' },
-  auxEngineV1FOPress: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'V#1 FO Press must be a positive number if entered' },
-  auxEngineV1LubOilPress: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'V#1 Lub Oil Press must be a positive number if entered' },
-  auxEngineV1WaterTemp: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, errorMessage: 'V#1 Water Temp must be a number if entered' },
-  auxEngineV1DailyRunHour: { required: false, pattern: VALIDATION_PATTERNS.NUMBER_ONLY, min: 0, errorMessage: 'V#1 Daily Run Hour must be a positive number if entered' },
-  engineChiefEngineerRemarks: { 
-    required: false, 
-    errorMessage: '' 
-  }
-};
-
-// CSS class constants for consistent styling
+// CSS class constants for consistent styling (Keep as is)
 export const FORM_STYLES = {
   // Base classes for inputs
-  EDITABLE_INPUT: "w-full p-2 border rounded bg-white",
-  READONLY_INPUT: "w-full p-2 border rounded bg-gray-100 cursor-not-allowed", 
+  EDITABLE_INPUT: "w-full p-2 border rounded bg-white border-gray-300", // Ensure default border is here
+  READONLY_INPUT: "w-full p-2 border rounded bg-gray-100 cursor-not-allowed border-gray-300",
   ERROR_BORDER: "border-red-500",
-  NORMAL_BORDER: "border-gray-300"
+  NORMAL_BORDER: "border-gray-300" // Keep for reference or specific use cases
 };
+
+// OLD Validation rules - can be removed once DepartureReportForm is refactored
+// export const departureValidationRules: ValidationRules = { ... }; // Commented out

@@ -1,247 +1,326 @@
-import React, { useState, FormEvent, ChangeEvent } from 'react';
+import React, { useState, useEffect } from 'react'; // Import useEffect
+import { useForm, SubmitHandler } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
 import {
-  BerthReportFormData,
-  defaultBerthValues,
-  berthValidationRules,
-  VALIDATION_PATTERNS,
+  ProcessedBerthFormData,
+  berthReportSchema, // Use the simple schema export
   FORM_STYLES
-  // ValidationRules generic type is defined but not directly used here
-} from './types/berthFormTypes'; // Updated Import
-
-// Define the shape of validation errors
-interface FormErrors {
-  [key: string]: string;
-}
+} from './types/berthFormTypes';
+// Import defaults and options from constants
+import { defaultBerthValues, windDirectionOptions, seaDirectionOptions, swellDirectionOptions, latDirOptions, lonDirOptions } from './types/berthFormConstants';
+import FormField from '../ui/FormField';
+import api from '../../utils/api'; // Import the api utility
+// Updated import path for bunker display components
+import { SteamingConsumptionDisplay, BunkerRobDisplay } from './common/BunkerSections'; // Updated path
+import EngineMachinerySection from './common/EngineMachinerySection'; // Import the new section component
+import {
+    POSITIVE_DECIMAL_ONLY,
+    INTEGER_ONLY,
+    TIMEZONE_FILTER,
+    // filterInput, // Removed unused import
+} from '../../utils/validationPatterns'; // Import shared patterns
+// Import Vessel type as well
+import { Voyage as BackendVoyage, Vessel, Report as BackendReport } from '../../../backend/src/types/dataTypes'; // Added BackendReport
 
 interface BerthReportFormProps {
-  onSubmit: (formData: any) => void; // Keep 'any' for now
+  vesselData?: Vessel | null; // Add vesselData prop
+  voyageData: BackendVoyage | null; // Add prop for voyage data
+  lastApprovedReport: BackendReport | null; // Still needed for ROB fetch logic
+  precedingPortReport?: BackendReport | null; // Add prop for the specific preceding report
+  cargoBeforeCurrentBerthOps: number; // Add prop for starting cargo quantity
+  onSubmit: SubmitHandler<ProcessedBerthFormData>; // Use RHF SubmitHandler and Zod type
   onCancel: () => void;
 }
 
-const BerthReportForm: React.FC<BerthReportFormProps> = ({ onSubmit, onCancel }) => {
-  // Use Berth types and defaults
-  const [formData, setFormData] = useState<BerthReportFormData>(defaultBerthValues);
-  const [errors, setErrors] = useState<FormErrors>({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
+const BerthReportForm: React.FC<BerthReportFormProps> = ({ vesselData, voyageData, lastApprovedReport, precedingPortReport, cargoBeforeCurrentBerthOps, onSubmit, onCancel }) => { // Destructure new prop
+  const {
+    control, // Keep control for FormField usage
+    handleSubmit,
+    formState: { errors, isSubmitting },
+    register, // Use register for simple inputs
+    watch, // Added watch for display components
+    setError, // Add setError
+    setValue // Import setValue
+  } = useForm<ProcessedBerthFormData>({
+    // Use the simple schema, context is not needed for this approach
+    resolver: zodResolver(berthReportSchema),
+    defaultValues: defaultBerthValues,
+    mode: 'onChange', // Added mode
+  });
 
   // TODO: Fetch or determine actual cargo status from voyage data
-  const [cargoStatus, setCargoStatus] = useState<'loaded' | 'ballast'>('loaded'); // Keep simulation for now
+  const [cargoStatus] = useState<'loaded' | 'ballast'>('loaded'); // Keep simulation for now, removed unused setCargoStatus
 
-  // --- Validation and Handler Functions (Adapted from Arrival/Departure) ---
+  // Log the received preceding report prop for debugging Harbour Distance
+  useEffect(() => {
+    console.log("Berth Form received precedingPortReport:", precedingPortReport);
+    console.log("Harbour distance from preceding report:", precedingPortReport?.report_data?.harbour_distance);
+  }, [precedingPortReport]);
 
-  const handleChange = (e: ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    let isValidInput = true;
-
-    // --- Real-time Input Filtering (Adapted for Berth) ---
-    if (e.target.tagName === 'INPUT' && e.target.getAttribute('type') !== 'date' && e.target.getAttribute('type') !== 'time') {
-      // Integer-only fields for Berth Report
-      if (['windForce', 'seaState', 'swellHeight', 'engineLoadTCRPM1', 'engineLoadTCRPM2'].includes(name)) { // Removed prsRpm if not needed
-         const integerRegex = VALIDATION_PATTERNS.INTEGER_ONLY;
-         if (value && !integerRegex.test(value)) {
-           isValidInput = false;
-         }
-      }
-      // Decimal number fields for Berth Report
-      else if ([
-        'fwdDraft', 'aftDraft', 'faspLatitude', 'faspLongitude', // Berth position fields
-        // Cargo Ops fields
-        'cargoUnloadedMT', 'cargoLoadedMT',
-        // Bunker fields (Simplified)
-        'boilerLSIFO', 'boilerLSMGO', 'auxLSIFO', 'auxLSMGO', 'harbourLSIFO', 'harbourLSMGO',
-        'supplyLSIFO', 'supplyLSMGO', 'supplyCYLOIL', 'supplyMEOIL', 'supplyAEOIL', 'supplyVOLOIL',
-        // Engine fields (Copied)
-        'engineLoadFOPressure', 'engineLoadLubOilPressure', 'engineLoadFWInletTemp', 'engineLoadLOInletTemp',
-        'engineLoadScavAirTemp', 'engineLoadTCExhTempIn', 'engineLoadTCExhTempOut',
-        'engineLoadThrustBearingTemp', 'engineLoadDailyRunHour',
-        // Engine Units
-        'engineUnit1ExhaustTemp', 'engineUnit1UnderPistonAir', 'engineUnit1PCOOutlet', 'engineUnit1JCFWOutletTemp',
-        'engineUnit2ExhaustTemp', 'engineUnit2UnderPistonAir', 'engineUnit2PCOOutlet', 'engineUnit2JCFWOutletTemp',
-        'engineUnit3ExhaustTemp', 'engineUnit3UnderPistonAir', 'engineUnit3PCOOutlet', 'engineUnit3JCFWOutletTemp',
-        'engineUnit4ExhaustTemp', 'engineUnit4UnderPistonAir', 'engineUnit4PCOOutlet', 'engineUnit4JCFWOutletTemp',
-        'engineUnit5ExhaustTemp', 'engineUnit5UnderPistonAir', 'engineUnit5PCOOutlet', 'engineUnit5JCFWOutletTemp',
-        'engineUnit6ExhaustTemp', 'engineUnit6UnderPistonAir', 'engineUnit6PCOOutlet', 'engineUnit6JCFWOutletTemp',
-        'engineUnit7ExhaustTemp', 'engineUnit7UnderPistonAir', 'engineUnit7PCOOutlet', 'engineUnit7JCFWOutletTemp',
-        'engineUnit8ExhaustTemp', 'engineUnit8UnderPistonAir', 'engineUnit8PCOOutlet', 'engineUnit8JCFWOutletTemp',
-        // Aux Engines
-        'auxEngineDG1Load', 'auxEngineDG1KW', 'auxEngineDG1FOPress', 'auxEngineDG1LubOilPress', 'auxEngineDG1WaterTemp', 'auxEngineDG1DailyRunHour',
-        'auxEngineDG2Load', 'auxEngineDG2KW', 'auxEngineDG2FOPress', 'auxEngineDG2LubOilPress', 'auxEngineDG2WaterTemp', 'auxEngineDG2DailyRunHour',
-        'auxEngineDG3Load', 'auxEngineDG3KW', 'auxEngineDG3FOPress', 'auxEngineDG3LubOilPress', 'auxEngineDG3WaterTemp', 'auxEngineDG3DailyRunHour',
-        'auxEngineV1Load', 'auxEngineV1KW', 'auxEngineV1FOPress', 'auxEngineV1LubOilPress', 'auxEngineV1WaterTemp', 'auxEngineV1DailyRunHour'
-      ].includes(name)) {
-        isValidInput = !value || VALIDATION_PATTERNS.NUMBER_ONLY.test(value);
-      }
-      // Time zone field
-      else if (name === 'timeZone') {
-        const timeZoneRegex = /^[+-]?\d{0,2}$/;
-        if (value && !timeZoneRegex.test(value)) {
-          isValidInput = false;
-        }
-      }
-      // Text only fields (Example: berthNumber might allow alphanumeric)
-      // else if (['berthNumber'].includes(name)) {
-      //   // Add specific regex if needed, otherwise allow any text
-      // }
-    }
-
-    // Only update state if the input is valid
-    if (isValidInput) {
-      setFormData(prev => ({ ...prev, [name]: value }));
-      // Clear error when user corrects the field
-      if (errors[name]) {
-        const currentError = validateField(name as keyof BerthReportFormData, value);
-        if (!currentError) {
-          setErrors(prev => {
-            const newErrors = { ...prev };
-            delete newErrors[name];
-            return newErrors;
-          });
-        }
-      }
-    }
-  };
-
-  // Validate a single field based on Berth rules
-  const validateField = (name: keyof BerthReportFormData, value: string): string => {
-    const rules = berthValidationRules[name];
-    if (!rules) return '';
-
-    if (rules.required && (!value || value.trim() === '')) {
-      return rules.errorMessage;
-    }
-    if (!rules.required && (!value || value.trim() === '')) {
-      return '';
-    }
-    if (rules.pattern && !rules.pattern.test(value)) {
-      return rules.errorMessage;
-    }
-    if (rules.min !== undefined || rules.max !== undefined) {
-      const numValue = parseFloat(value);
-      if (isNaN(numValue)) {
-        if (rules.pattern === VALIDATION_PATTERNS.NUMBER_ONLY || rules.pattern === VALIDATION_PATTERNS.INTEGER_ONLY) {
-          return rules.errorMessage;
+  // Add useEffect to fetch bunker data when the form loads or lastApprovedReport changes
+  useEffect(() => {
+    const fetchBunkerData = async () => {
+      if (lastApprovedReport?.id) {
+        console.log(`Berth Form: Fetching bunker data for last approved report ID: ${lastApprovedReport.id}`);
+        try {
+          const bunkerRecord = await api.getBunkerRecordForReport(lastApprovedReport.id);
+          if (bunkerRecord) {
+            console.log("Berth Form: Fetched bunker record:", bunkerRecord);
+            // Set the ROB values in the form using setValue
+            setValue('robLSIFO', bunkerRecord.lsifo_rob.toString());
+            setValue('robLSMGO', bunkerRecord.lsmgo_rob.toString());
+            setValue('robCYLOIL', bunkerRecord.cyl_oil_rob.toString());
+            setValue('robMEOIL', bunkerRecord.me_oil_rob.toString());
+            setValue('robAEOIL', bunkerRecord.ae_oil_rob.toString());
+            setValue('robVOLOIL', bunkerRecord.vol_oil_rob.toString());
+            console.log("Berth Form: Set ROB form values.");
+          } else {
+             console.log("Berth Form: No bunker record found for last approved report.");
+          }
+        } catch (error) {
+          console.error('Berth Form: Failed to fetch bunker data:', error);
         }
       } else {
-        if (rules.min !== undefined && numValue < rules.min) return rules.errorMessage;
-        if (rules.max !== undefined && numValue > rules.max) return rules.errorMessage;
+         console.log("Berth Form: No last approved report ID available.");
       }
-    }
-    if (rules.custom && !rules.custom(value)) {
-      return rules.errorMessage;
-    }
-    return '';
+    };
+
+    fetchBunkerData();
+  }, [lastApprovedReport?.id, setValue]); // Dependencies
+
+  // Removed useEffect for Total Distance Travelled
+
+  // Watch cargo fields for calculation
+  const cargoUnloaded = watch('cargoUnloadedMT');
+  const cargoLoaded = watch('cargoLoadedMT');
+  // const initialCargo = voyageData?.cargo_quantity; // No longer use initial voyage cargo directly
+
+  // Calculate remaining cargo based on cargo before this report's ops
+  const calculateRemainingCargo = () => {
+    // Use the passed prop as the starting point
+    const initial = typeof cargoBeforeCurrentBerthOps === 'number' ? cargoBeforeCurrentBerthOps : 0;
+    const unloaded = typeof cargoUnloaded === 'number' ? cargoUnloaded : 0;
+    const loaded = typeof cargoLoaded === 'number' ? cargoLoaded : 0;
+    // Basic logic: initial - unloaded + loaded. Adjust if business logic differs.
+    return (initial - unloaded + loaded).toFixed(2); // Assuming 2 decimal places for cargo
   };
 
-  // Validate the entire form based on Berth rules
-  const validateForm = (): boolean => {
-    const newErrors: FormErrors = {};
-    let isValid = true;
-    (Object.keys(berthValidationRules) as Array<keyof BerthReportFormData>).forEach((key) => {
-      const value = formData[key] ?? '';
-      const error = validateField(key, value);
-      if (error) {
-        newErrors[key] = error;
-        isValid = false;
+  const remainingCargoDisplay = calculateRemainingCargo();
+
+
+  // --- Form Submission ---
+  const handleFormSubmit: SubmitHandler<ProcessedBerthFormData> = async (data) => {
+    console.log('Submitting Berth Report Data (Post-Zod):', data);
+
+    // --- Manual Validation ---
+    // Validate against the cargo *before* this report's operations
+    const currentCargo = cargoBeforeCurrentBerthOps;
+    // Check only if cargoUnloadedMT has a value and currentCargo is a number
+    if (typeof currentCargo === 'number' && typeof data.cargoUnloadedMT === 'number' && data.cargoUnloadedMT > currentCargo) {
+        setError('cargoUnloadedMT', {
+            type: 'manual',
+            message: `Cannot unload ${data.cargoUnloadedMT} MT. Only ${currentCargo} MT currently on board.`
+        });
+        console.error("Manual validation failed: Unload quantity exceeds current cargo.");
+        return; // Stop submission
+    }
+    // --- End Manual Validation ---
+
+    // --- Get actual vesselId and submittedBy from props ---
+    const vesselId = vesselData?.id ?? 0; // Use actual vessel ID if available, fallback to 0
+    const submittedBy = vesselData?.current_captain ?? 'unknown_captain'; // Use actual captain if available
+    // ---
+
+    // Transform input data to match backend expectations
+    const transformedData = {
+      ...data,
+      // Map consumption fields to harbor*Consumed
+      // Note: Berth form schema uses detailed ME/Aux/Boiler fields for input
+      harborLsifoConsumed: (data.meLSIFO || 0) + (data.boilerLSIFO || 0) + (data.auxLSIFO || 0),
+      harborLsmgoConsumed: (data.meLSMGO || 0) + (data.boilerLSMGO || 0) + (data.auxLSMGO || 0),
+      harborCylOilConsumed: data.meCYLOIL || 0,
+      harborMeOilConsumed: data.meMEOIL || 0,
+      harborAeOilConsumed: data.meAEOIL || 0,
+      harborVolOilConsumed: 0, // Default to 0 if not present
+
+      // Map supply fields
+      lsifoSupplied: data.supplyLSIFO || 0,
+      lsmgoSupplied: data.supplyLSMGO || 0,
+      cylOilSupplied: data.supplyCYLOIL || 0,
+      meOilSupplied: data.supplyMEOIL || 0,
+      aeOilSupplied: data.supplyAEOIL || 0,
+      volOilSupplied: data.supplyVOLOIL || 0,
+
+      // Map cargo fields
+      cargoLoaded: data.cargoLoadedMT,
+      cargoUnloaded: data.cargoUnloadedMT,
+    };
+     // Remove the detailed consumption/supply/cargo fields if they are not needed in report_data
+     // delete transformedData.meLSIFO; // Example if needed
+     // ... delete other detailed fields ...
+
+    console.log('Transformed Berth Report Data for API:', transformedData);
+
+
+    try {
+      const createdReport = await api.submitReport(
+        vesselId,
+        submittedBy,
+        'berth', // Explicitly set report type
+        transformedData // Pass the transformed data
+      );
+      console.log('Berth Report submitted successfully:', createdReport);
+      // Call original onSubmit prop ONLY on successful API call
+      onSubmit(data); // Pass original data back to parent if needed
+      // Optionally show success message
+      alert('Berth Report submitted successfully!');
+    } catch (err: any) { // Use err consistently
+      console.error('Failed to submit Berth Report:', err);
+      // Show specific backend error or generic message
+      alert(`Failed to submit Berth Report: ${err.response?.data?.message || err.message || 'Unknown error'}`);
+    }
+    // Note: isSubmitting state is handled by RHF
+  };
+
+  // Function to handle scrolling to the first error
+  const onFormError = (errorList: any) => {
+      console.log("Berth Form validation failed (RHF)", errorList);
+      const firstErrorKey = Object.keys(errorList)[0];
+      if (firstErrorKey) {
+          const firstErrorEl = document.querySelector(`[name="${firstErrorKey}"]`);
+          if (firstErrorEl) {
+              firstErrorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
       }
-    });
-    // TODO: Add conditional validation for Cargo Ops based on cargoStatus
-    setErrors(newErrors);
-    return isValid;
   };
 
-  // Handle form submission
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-
-    if (validateForm()) {
-      const finalData: any = {};
-      // Process data: Convert numbers, remove empty optional fields
-      (Object.keys(defaultBerthValues) as Array<keyof BerthReportFormData>).forEach(key => {
-        const value = formData[key] ?? '';
-        const rules = berthValidationRules[key];
-        if (formData.hasOwnProperty(key)) {
-            if (rules?.pattern === VALIDATION_PATTERNS.NUMBER_ONLY || rules?.pattern === VALIDATION_PATTERNS.LATITUDE || rules?.pattern === VALIDATION_PATTERNS.LONGITUDE) {
-                finalData[key] = parseFloat(value) || 0;
-            } else if (rules?.pattern === VALIDATION_PATTERNS.INTEGER_ONLY) {
-                finalData[key] = parseInt(value) || 0;
-            } else {
-                finalData[key] = value;
-            }
-            if (finalData[key] === '' && rules && !rules.required) {
-                delete finalData[key];
-            }
-        }
-      });
-      console.log('Berth report processed data:', finalData);
-      onSubmit(finalData);
-    } else {
-      console.log("Berth Form validation failed", errors);
-      setIsSubmitting(false);
-      const firstErrorEl = document.querySelector('.border-red-500');
-      if (firstErrorEl) {
-        firstErrorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-    }
-  };
-
-  // --- Styling Helpers ---
-  const getInputClassName = (fieldName: keyof BerthReportFormData, isReadOnly: boolean = false) => {
-    const baseClass = isReadOnly ? FORM_STYLES.READONLY_INPUT : FORM_STYLES.EDITABLE_INPUT;
-    const borderClass = errors[fieldName] ? FORM_STYLES.ERROR_BORDER : FORM_STYLES.NORMAL_BORDER;
-    const cleanBaseClass = baseClass.replace(/border-gray-300/g, '');
-    return `${cleanBaseClass} ${borderClass}`;
-  };
-
-  const renderError = (fieldName: keyof BerthReportFormData) => {
-    return errors[fieldName] ? <p className="text-xs text-red-500 mt-1">{errors[fieldName]}</p> : null;
-  };
-
+  // --- Styling Helpers (getInputClassName, renderError) are removed ---
 
   return (
     <div className="bg-white p-6 rounded shadow">
       <h2 className="text-xl font-bold mb-4">Berth Report</h2>
-      <form onSubmit={handleSubmit} noValidate>
+      {/* Use RHF's handleSubmit */}
+      <form onSubmit={handleSubmit(handleFormSubmit, onFormError)} noValidate>
 
-        {/* General Information Section - Connected */}
+        {/* General Information Section */}
         <div className="mb-6">
           <h3 className="font-bold border-b pb-2 mb-4">General Information</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Read-only fields */}
-            <div><label className="block text-sm font-medium mb-1">M/V (Vessel)</label><input type="text" className={getInputClassName('vessel' as any, true)} value="NORTHERN STAR" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
-            <div><label className="block text-sm font-medium mb-1">Flag</label><input type="text" className={getInputClassName('flag' as any, true)} value="PANAMA" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
-            <div><label className="block text-sm font-medium mb-1">Captain</label><input type="text" className={getInputClassName('captain' as any, true)} value="JOHN SMITH" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
-            <div><label className="block text-sm font-medium mb-1">Voyage #</label><input type="text" className={getInputClassName('voyage' as any, true)} value="04/2025" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
-            <div><label className="block text-sm font-medium mb-1">BLS Quantity</label><input type="text" className={getInputClassName('blsQuantity' as any, true)} value="32500" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
-            <div><label className="block text-sm font-medium mb-1">Cargo Type</label><input type="text" className={getInputClassName('cargoType' as any, true)} value="CONTAINERS" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
-            <div><label className="block text-sm font-medium mb-1">Cargo Quantity (MT)</label><input type="text" className={getInputClassName('cargoQuantity' as any, true)} value="32500" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
-            <div><label className="block text-sm font-medium mb-1">Port</label><input type="text" className={getInputClassName('port' as any, true)} value="SINGAPORE" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            {/* Read-only fields - Use vesselData and voyageData props */}
+            <div><label className="block text-sm font-medium mb-1">M/V (Vessel)</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={vesselData?.name || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            <div><label className="block text-sm font-medium mb-1">Flag</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={vesselData?.flag || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            <div><label className="block text-sm font-medium mb-1">Captain</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={vesselData?.current_captain || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            <div><label className="block text-sm font-medium mb-1">Voyage #</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={voyageData?.voyage_number || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            <div><label className="block text-sm font-medium mb-1">BLS Quantity</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={vesselData?.bls || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            <div><label className="block text-sm font-medium mb-1">Cargo Type</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={voyageData?.cargo_type || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            <div><label className="block text-sm font-medium mb-1">Cargo Quantity (MT)</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={voyageData?.cargo_quantity || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
+            {/* Port should likely be the destination port from the voyage data for Berth report */}
+            <div><label className="block text-sm font-medium mb-1">Port</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value={voyageData?.destination_port || 'N/A'} readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div>
 
-            {/* Editable fields */}
-            <div><label className="block text-sm font-medium mb-1">Date <span className="text-red-500">*</span></label><input type="date" name="date" value={formData.date} onChange={handleChange} className={getInputClassName('date')} />{renderError('date')}</div>
-            <div><label className="block text-sm font-medium mb-1">Zone +/- <span className="text-red-500">*</span></label><input type="text" name="timeZone" value={formData.timeZone} onChange={handleChange} className={getInputClassName('timeZone')} placeholder="e.g. +3 or -10" />{renderError('timeZone')}</div>
-            <div><label className="block text-sm font-medium mb-1">Berth Number <span className="text-red-500">*</span></label><input type="text" name="berthNumber" value={formData.berthNumber} onChange={handleChange} className={getInputClassName('berthNumber')} placeholder="e.g. B12" />{renderError('berthNumber')}</div>
-            <div><label className="block text-sm font-medium mb-1">FWD Draft (M) <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="fwdDraft" value={formData.fwdDraft} onChange={handleChange} className={getInputClassName('fwdDraft')} />{renderError('fwdDraft')}</div>
-            <div><label className="block text-sm font-medium mb-1">AFT Draft (M) <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="aftDraft" value={formData.aftDraft} onChange={handleChange} className={getInputClassName('aftDraft')} />{renderError('aftDraft')}</div>
+            {/* Editable fields using FormField */}
+            <FormField name="date" label="Date" type="date" register={register} errors={errors} isRequired />
+            <FormField name="timeZone" label="Zone +/-" type="text" register={register} errors={errors} control={control} validationPattern={TIMEZONE_FILTER} placeholder="e.g. +3 or -10" maxLength={3} isRequired />
+            <FormField name="berthNumber" label="Berth Number" type="text" register={register} errors={errors} placeholder="e.g. B12" isRequired />
+            <FormField name="fwdDraft" label="FWD Draft (M)" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired />
+            <FormField name="aftDraft" label="AFT Draft (M)" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired />
           </div>
         </div>
 
-        {/* Navigation Data Section (Berth Specific) - Connected */}
+        {/* Navigation Data Section (Berth Specific) */}
         <div className="mb-6">
            <h3 className="font-bold border-b pb-2 mb-4">Navigation Data</h3>
            {/* Berth Position */}
            <div className="bg-blue-50 p-4 rounded mb-4">
              <h4 className="font-bold mb-2">Berth Position & Time</h4>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-               <div><label className="block text-sm font-medium mb-1">Date <span className="text-red-500">*</span></label><input type="date" name="faspDate" value={formData.faspDate} onChange={handleChange} className={getInputClassName('faspDate')} />{renderError('faspDate')}</div>
-               <div><label className="block text-sm font-medium mb-1">Time <span className="text-red-500">*</span></label><input type="time" name="faspTime" value={formData.faspTime} onChange={handleChange} className={getInputClassName('faspTime')} />{renderError('faspTime')}</div>
-               <div>
+               <FormField name="faspDate" label="Date" type="date" register={register} errors={errors} isRequired wrapperClassName="mb-0" />
+               <FormField name="faspTime" label="Time" type="time" register={register} errors={errors} isRequired wrapperClassName="mb-0" />
+               {/* Latitude - Keep custom structure */}
+               <div className="mb-4">
                  <label className="block text-sm font-medium mb-1">Latitude <span className="text-red-500">*</span></label>
-                 <div className="flex"><input type="text" inputMode="decimal" name="faspLatitude" value={formData.faspLatitude} onChange={handleChange} className={getInputClassName('faspLatitude').replace('rounded', 'rounded-l')} placeholder="e.g. 1.290" /><select name="faspLatitudeDir" value={formData.faspLatitudeDir} onChange={handleChange} className={`p-2 border bg-white border-l-0 rounded-r ${errors.faspLatitudeDir ? FORM_STYLES.ERROR_BORDER : FORM_STYLES.NORMAL_BORDER}`}><option value="N">N</option><option value="S">S</option></select></div>{renderError('faspLatitude')}
+                 <div className="flex">
+                   <FormField
+                        name="faspLatitude"
+                        label=""
+                        type="text"
+                        inputMode="decimal"
+                        register={register}
+                        errors={errors}
+                        control={control}
+                        validationPattern={POSITIVE_DECIMAL_ONLY}
+                        placeholder="e.g. 1.290"
+                        isRequired
+                        wrapperClassName="flex-grow mb-0"
+                        inputClassName={`${FORM_STYLES.EDITABLE_INPUT.replace('rounded', 'rounded-l')} ${errors.faspLatitude ? FORM_STYLES.ERROR_BORDER : FORM_STYLES.NORMAL_BORDER}`}
+                    />
+                   <FormField
+                        name="faspLatitudeDir"
+                        label=""
+                        type="select"
+                        register={register}
+                        errors={errors}
+                        options={latDirOptions}
+                        isRequired
+                        wrapperClassName="mb-0"
+                        inputClassName={`p-2 border bg-white border-l-0 rounded-r ${errors.faspLatitudeDir ? FORM_STYLES.ERROR_BORDER : FORM_STYLES.NORMAL_BORDER}`}
+                    />
+                 </div>
+                 {(errors.faspLatitude || errors.faspLatitudeDir) && <p className="text-xs text-red-500 mt-1">{errors.faspLatitude?.message || errors.faspLatitudeDir?.message}</p>}
                </div>
-               <div>
+               {/* Longitude - Keep custom structure */}
+               <div className="mb-4">
                  <label className="block text-sm font-medium mb-1">Longitude <span className="text-red-500">*</span></label>
-                 <div className="flex"><input type="text" inputMode="decimal" name="faspLongitude" value={formData.faspLongitude} onChange={handleChange} className={getInputClassName('faspLongitude').replace('rounded', 'rounded-l')} placeholder="e.g. 103.851" /><select name="faspLongitudeDir" value={formData.faspLongitudeDir} onChange={handleChange} className={`p-2 border bg-white border-l-0 rounded-r ${errors.faspLongitudeDir ? FORM_STYLES.ERROR_BORDER : FORM_STYLES.NORMAL_BORDER}`}><option value="E">E</option><option value="W">W</option></select></div>{renderError('faspLongitude')}
+                 <div className="flex">
+                   <FormField
+                        name="faspLongitude"
+                        label=""
+                        type="text"
+                        inputMode="decimal"
+                        register={register}
+                        errors={errors}
+                        control={control}
+                        validationPattern={POSITIVE_DECIMAL_ONLY}
+                        placeholder="e.g. 103.851"
+                        isRequired
+                        wrapperClassName="flex-grow mb-0"
+                        inputClassName={`${FORM_STYLES.EDITABLE_INPUT.replace('rounded', 'rounded-l')} ${errors.faspLongitude ? FORM_STYLES.ERROR_BORDER : FORM_STYLES.NORMAL_BORDER}`}
+                    />
+                   <FormField
+                        name="faspLongitudeDir"
+                        label=""
+                        type="select"
+                        register={register}
+                        errors={errors}
+                        options={lonDirOptions}
+                        isRequired
+                        wrapperClassName="mb-0"
+                        inputClassName={`p-2 border bg-white border-l-0 rounded-r ${errors.faspLongitudeDir ? FORM_STYLES.ERROR_BORDER : FORM_STYLES.NORMAL_BORDER}`}
+                    />
+                 </div>
+                 {(errors.faspLongitude || errors.faspLongitudeDir) && <p className="text-xs text-red-500 mt-1">{errors.faspLongitude?.message || errors.faspLongitudeDir?.message}</p>}
+               </div>
+             </div>
+           </div>
+           {/* Total Distance Traveled Display */}
+           <div className="bg-gray-50 p-4 rounded mb-4">
+             <h4 className="font-bold mb-2">Distance Data</h4>
+             {/* Removed Total Distance Travelled display */}
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-4"> {/* Adjust grid if only Harbour Distance remains */}
+               {/* Display Harbour Distance from previous (Arrival) report */}
+               <div>
+                 <label className="block text-sm font-medium mb-1">Harbour Distance (NM)</label>
+                 <input
+                    type="text"
+                    // Use the new precedingPortReport prop here, with extra check for report_data and type
+                    value={
+                      (typeof precedingPortReport?.report_data === 'object' && precedingPortReport.report_data !== null && typeof precedingPortReport.report_data.harbour_distance === 'number')
+                      ? precedingPortReport.report_data.harbour_distance.toFixed(1)
+                      : 'N/A'
+                    }
+                    className={FORM_STYLES.READONLY_INPUT}
+                    readOnly
+                 />
+                 <p className="text-xs text-gray-500 mt-1">From previous Arrival report</p>
                </div>
              </div>
            </div>
@@ -249,19 +328,19 @@ const BerthReportForm: React.FC<BerthReportFormProps> = ({ onSubmit, onCancel })
             <div className="bg-gray-50 p-4 rounded mb-4">
              <h4 className="font-bold mb-2">Weather Data</h4>
              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-               <div><label className="block text-sm font-medium mb-1">Wind Direction <span className="text-red-500">*</span></label><select name="windDirection" value={formData.windDirection} onChange={handleChange} className={getInputClassName('windDirection')}><option value="">Select</option><option value="N">N</option><option value="NE">NE</option><option value="E">E</option><option value="SE">SE</option><option value="S">S</option><option value="SW">SW</option><option value="W">W</option><option value="NW">NW</option></select>{renderError('windDirection')}</div>
-               <div><label className="block text-sm font-medium mb-1">Wind Force (0-12) <span className="text-red-500">*</span></label><input type="text" inputMode="numeric" name="windForce" value={formData.windForce} onChange={handleChange} className={getInputClassName('windForce')} />{renderError('windForce')}</div>
-               <div><label className="block text-sm font-medium mb-1">Sea Direction <span className="text-red-500">*</span></label><select name="seaDirection" value={formData.seaDirection} onChange={handleChange} className={getInputClassName('seaDirection')}><option value="">Select</option><option value="N">N</option><option value="NE">NE</option><option value="E">E</option><option value="SE">SE</option><option value="S">S</option><option value="SW">SW</option><option value="W">W</option><option value="NW">NW</option></select>{renderError('seaDirection')}</div>
-               <div><label className="block text-sm font-medium mb-1">Sea State (0-9) <span className="text-red-500">*</span></label><input type="text" inputMode="numeric" name="seaState" value={formData.seaState} onChange={handleChange} className={getInputClassName('seaState')} />{renderError('seaState')}</div>
-               <div><label className="block text-sm font-medium mb-1">Swell Direction <span className="text-red-500">*</span></label><select name="swellDirection" value={formData.swellDirection} onChange={handleChange} className={getInputClassName('swellDirection')}><option value="">Select</option><option value="N">N</option><option value="NE">NE</option><option value="E">E</option><option value="SE">SE</option><option value="S">S</option><option value="SW">SW</option><option value="W">W</option><option value="NW">NW</option></select>{renderError('swellDirection')}</div>
-               <div><label className="block text-sm font-medium mb-1">Swell Height (0-9) <span className="text-red-500">*</span></label><input type="text" inputMode="numeric" name="swellHeight" value={formData.swellHeight} onChange={handleChange} className={getInputClassName('swellHeight')} />{renderError('swellHeight')}</div>
+               <FormField name="windDirection" label="Wind Direction" type="select" register={register} errors={errors} options={windDirectionOptions} placeholder="Select" isRequired wrapperClassName="mb-0" />
+               <FormField name="windForce" label="Wind Force (0-12)" type="text" inputMode="numeric" register={register} errors={errors} control={control} validationPattern={INTEGER_ONLY} isRequired wrapperClassName="mb-0" />
+               <FormField name="seaDirection" label="Sea Direction" type="select" register={register} errors={errors} options={seaDirectionOptions} placeholder="Select" isRequired wrapperClassName="mb-0" />
+               <FormField name="seaState" label="Sea State (0-9)" type="text" inputMode="numeric" register={register} errors={errors} control={control} validationPattern={INTEGER_ONLY} isRequired wrapperClassName="mb-0" />
+               <FormField name="swellDirection" label="Swell Direction" type="select" register={register} errors={errors} options={swellDirectionOptions} placeholder="Select" isRequired wrapperClassName="mb-0" />
+               <FormField name="swellHeight" label="Swell Height (0-9)" type="text" inputMode="numeric" register={register} errors={errors} control={control} validationPattern={INTEGER_ONLY} isRequired wrapperClassName="mb-0" />
              </div>
            </div>
            {/* Captain Remarks */}
-           <div><label className="block text-sm font-medium mb-1">Captain Remarks (Navigation/Weather)</label><textarea name="captainRemarks" value={formData.captainRemarks} onChange={handleChange} className={`${getInputClassName('captainRemarks')} h-24`} placeholder="Optional remarks..."></textarea>{renderError('captainRemarks')}</div>
+           <FormField name="captainRemarks" label="Captain Remarks (Navigation/Weather)" type="textarea" register={register} errors={errors} placeholder="Optional remarks..." />
         </div>
 
-        {/* Cargo Operations Section - Connected */}
+        {/* Cargo Operations Section */}
         <div className="mb-6">
           <h3 className="font-bold border-b pb-2 mb-4">Cargo Operations</h3>
           <div className="bg-blue-50 p-4 rounded mb-4">
@@ -274,50 +353,90 @@ const BerthReportForm: React.FC<BerthReportFormProps> = ({ onSubmit, onCancel })
               <div className="bg-white p-4 rounded border">
                 <h5 className="font-medium mb-3">Cargo Unloading</h5>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div><label className="block text-sm font-medium mb-1">Cargo Unloaded (MT)</label><input type="text" inputMode="decimal" name="cargoUnloadedMT" value={formData.cargoUnloadedMT} onChange={handleChange} className={getInputClassName('cargoUnloadedMT')} />{renderError('cargoUnloadedMT')}</div>
-                  <div><label className="block text-sm font-medium mb-1">Remaining Cargo (MT)</label><input type="text" className={getInputClassName('remainingCargo' as any, true)} readOnly /><p className="text-xs text-gray-500 mt-1">Calculated</p></div>
-                  <div><label className="block text-sm font-medium mb-1">Unloading Start</label><div className="grid grid-cols-2 gap-2"><input type="date" name="unloadingStartDate" value={formData.unloadingStartDate} onChange={handleChange} className={getInputClassName('unloadingStartDate')} /> <input type="time" name="unloadingStartTime" value={formData.unloadingStartTime} onChange={handleChange} className={getInputClassName('unloadingStartTime')} /></div>{renderError('unloadingStartDate')}{renderError('unloadingStartTime')}</div>
-                  <div><label className="block text-sm font-medium mb-1">Unloading End</label><div className="grid grid-cols-2 gap-2"><input type="date" name="unloadingEndDate" value={formData.unloadingEndDate} onChange={handleChange} className={getInputClassName('unloadingEndDate')} /> <input type="time" name="unloadingEndTime" value={formData.unloadingEndTime} onChange={handleChange} className={getInputClassName('unloadingEndTime')} /></div>{renderError('unloadingEndDate')}{renderError('unloadingEndTime')}</div>
+                  <FormField name="cargoUnloadedMT" label="Cargo Unloaded (MT)" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} />
+                  {/* Display calculated remaining cargo */}
+                  <div><label className="block text-sm font-medium mb-1">Remaining Cargo (MT)</label><input type="text" value={remainingCargoDisplay} className={FORM_STYLES.READONLY_INPUT} readOnly /><p className="text-xs text-gray-500 mt-1">Calculated</p></div>
+                  <div><label className="block text-sm font-medium mb-1">Unloading Start</label><div className="grid grid-cols-2 gap-2"><FormField name="unloadingStartDate" label="" type="date" register={register} errors={errors} wrapperClassName="mb-0" /><FormField name="unloadingStartTime" label="" type="time" register={register} errors={errors} wrapperClassName="mb-0" /></div>{(errors.unloadingStartDate || errors.unloadingStartTime) && <p className="text-xs text-red-500 mt-1">{errors.unloadingStartDate?.message || errors.unloadingStartTime?.message}</p>}</div>
+                  <div><label className="block text-sm font-medium mb-1">Unloading End</label><div className="grid grid-cols-2 gap-2"><FormField name="unloadingEndDate" label="" type="date" register={register} errors={errors} wrapperClassName="mb-0" /><FormField name="unloadingEndTime" label="" type="time" register={register} errors={errors} wrapperClassName="mb-0" /></div>{(errors.unloadingEndDate || errors.unloadingEndTime) && <p className="text-xs text-red-500 mt-1">{errors.unloadingEndDate?.message || errors.unloadingEndTime?.message}</p>}</div>
                 </div>
               </div>
             ) : (
               <div className="bg-white p-4 rounded border">
                 <h5 className="font-medium mb-3">Cargo Loading</h5>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div><label className="block text-sm font-medium mb-1">Cargo Type</label><input type="text" className={getInputClassName('cargoType' as any, true)} value="CONTAINERS" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div> {/* Assuming type comes from voyage */}
-                  <div><label className="block text-sm font-medium mb-1">Cargo Loaded (MT)</label><input type="text" inputMode="decimal" name="cargoLoadedMT" value={formData.cargoLoadedMT} onChange={handleChange} className={getInputClassName('cargoLoadedMT')} />{renderError('cargoLoadedMT')}</div>
-                  <div><label className="block text-sm font-medium mb-1">Loading Start</label><div className="grid grid-cols-2 gap-2"><input type="date" name="loadingStartDate" value={formData.loadingStartDate} onChange={handleChange} className={getInputClassName('loadingStartDate')} /> <input type="time" name="loadingStartTime" value={formData.loadingStartTime} onChange={handleChange} className={getInputClassName('loadingStartTime')} /></div>{renderError('loadingStartDate')}{renderError('loadingStartTime')}</div>
-                  <div><label className="block text-sm font-medium mb-1">Loading End</label><div className="grid grid-cols-2 gap-2"><input type="date" name="loadingEndDate" value={formData.loadingEndDate} onChange={handleChange} className={getInputClassName('loadingEndDate')} /> <input type="time" name="loadingEndTime" value={formData.loadingEndTime} onChange={handleChange} className={getInputClassName('loadingEndTime')} /></div>{renderError('loadingEndDate')}{renderError('loadingEndTime')}</div>
+                  <div><label className="block text-sm font-medium mb-1">Cargo Type</label><input type="text" className={FORM_STYLES.READONLY_INPUT} value="CONTAINERS" readOnly /><p className="text-xs text-gray-500 mt-1">Read only</p></div> {/* Assuming type comes from voyage */}
+                  <FormField name="cargoLoadedMT" label="Cargo Loaded (MT)" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} />
+                  <div><label className="block text-sm font-medium mb-1">Loading Start</label><div className="grid grid-cols-2 gap-2"><FormField name="loadingStartDate" label="" type="date" register={register} errors={errors} wrapperClassName="mb-0" /><FormField name="loadingStartTime" label="" type="time" register={register} errors={errors} wrapperClassName="mb-0" /></div>{(errors.loadingStartDate || errors.loadingStartTime) && <p className="text-xs text-red-500 mt-1">{errors.loadingStartDate?.message || errors.loadingStartTime?.message}</p>}</div>
+                  <div><label className="block text-sm font-medium mb-1">Loading End</label><div className="grid grid-cols-2 gap-2"><FormField name="loadingEndDate" label="" type="date" register={register} errors={errors} wrapperClassName="mb-0" /><FormField name="loadingEndTime" label="" type="time" register={register} errors={errors} wrapperClassName="mb-0" /></div>{(errors.loadingEndDate || errors.loadingEndTime) && <p className="text-xs text-red-500 mt-1">{errors.loadingEndDate?.message || errors.loadingEndTime?.message}</p>}</div>
                 </div>
               </div>
             )}
           </div>
-          <div><label className="block text-sm font-medium mb-1">Cargo Operations Remarks</label><textarea name="cargoOpsRemarks" value={formData.cargoOpsRemarks} onChange={handleChange} className={`${getInputClassName('cargoOpsRemarks')} h-24`} placeholder="Optional remarks..."></textarea>{renderError('cargoOpsRemarks')}</div>
+          <FormField name="cargoOpsRemarks" label="Cargo Operations Remarks" type="textarea" register={register} errors={errors} placeholder="Optional remarks..." />
         </div>
 
-        {/* --- Bunker Section --- Connected (Simplified) */}
+        {/* --- Bunker Section --- Use Controller for inputs */}
         <div className="mb-6">
           <h3 className="font-bold border-b pb-2 mb-4">Bunker Data</h3>
-          {/* PRS RPM removed */}
+          {/* PRS RPM with Controller - Handle undefined */}
+          <FormField name="prsRpm" label="PRS RPM" type="text" inputMode="numeric" register={register} errors={errors} control={control} validationPattern={INTEGER_ONLY} isRequired />
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-4">
-            {/* ME Consumption removed */}
-            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Boiler Consumption</h4><div className="space-y-2"><div><label className="text-sm">LSIFO <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="boilerLSIFO" value={formData.boilerLSIFO} onChange={handleChange} className={getInputClassName('boilerLSIFO')} />{renderError('boilerLSIFO')}</div><div><label className="text-sm">LSMGO <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="boilerLSMGO" value={formData.boilerLSMGO} onChange={handleChange} className={getInputClassName('boilerLSMGO')} />{renderError('boilerLSMGO')}</div></div></div>
-            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Aux Consumption</h4><div className="space-y-2"><div><label className="text-sm">LSIFO <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="auxLSIFO" value={formData.auxLSIFO} onChange={handleChange} className={getInputClassName('auxLSIFO')} />{renderError('auxLSIFO')}</div><div><label className="text-sm">LSMGO <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="auxLSMGO" value={formData.auxLSMGO} onChange={handleChange} className={getInputClassName('auxLSMGO')} />{renderError('auxLSMGO')}</div></div></div>
-            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Harbour Consumption</h4><div className="space-y-2"><div><label className="text-sm">LSIFO <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="harbourLSIFO" value={formData.harbourLSIFO} onChange={handleChange} className={getInputClassName('harbourLSIFO')} />{renderError('harbourLSIFO')}</div><div><label className="text-sm">LSMGO <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="harbourLSMGO" value={formData.harbourLSMGO} onChange={handleChange} className={getInputClassName('harbourLSMGO')} />{renderError('harbourLSMGO')}</div></div></div>
-            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Bunker Supply (Optional)</h4><div className="space-y-2"><div><label className="text-sm">LSIFO</label><input type="text" inputMode="decimal" name="supplyLSIFO" value={formData.supplyLSIFO} onChange={handleChange} className={getInputClassName('supplyLSIFO')} />{renderError('supplyLSIFO')}</div><div><label className="text-sm">LSMGO</label><input type="text" inputMode="decimal" name="supplyLSMGO" value={formData.supplyLSMGO} onChange={handleChange} className={getInputClassName('supplyLSMGO')} />{renderError('supplyLSMGO')}</div><div><label className="text-sm">CYL OIL</label><input type="text" inputMode="decimal" name="supplyCYLOIL" value={formData.supplyCYLOIL} onChange={handleChange} className={getInputClassName('supplyCYLOIL')} />{renderError('supplyCYLOIL')}</div><div><label className="text-sm">M/E OIL</label><input type="text" inputMode="decimal" name="supplyMEOIL" value={formData.supplyMEOIL} onChange={handleChange} className={getInputClassName('supplyMEOIL')} />{renderError('supplyMEOIL')}</div><div><label className="text-sm">A/E OIL</label><input type="text" inputMode="decimal" name="supplyAEOIL" value={formData.supplyAEOIL} onChange={handleChange} className={getInputClassName('supplyAEOIL')} />{renderError('supplyAEOIL')}</div><div><label className="text-sm">VOL OIL</label><input type="text" inputMode="decimal" name="supplyVOLOIL" value={formData.supplyVOLOIL} onChange={handleChange} className={getInputClassName('supplyVOLOIL')} />{renderError('supplyVOLOIL')}</div></div></div>
-            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Bunker ROB</h4><p className="text-xs text-gray-500 mb-2">Read only</p><div className="space-y-2"><div><label className="text-sm">LSIFO</label><input type="text" className={getInputClassName('robLSIFO' as any, true)} value={'N/A'} readOnly /></div><div><label className="text-sm">LSMGO</label><input type="text" className={getInputClassName('robLSMGO' as any, true)} value={'N/A'} readOnly /></div><div><label className="text-sm">CYL OIL</label><input type="text" className={getInputClassName('robCYLOIL' as any, true)} value={'N/A'} readOnly /></div><div><label className="text-sm">M/E OIL</label><input type="text" className={getInputClassName('robMEOIL' as any, true)} value={'N/A'} readOnly /></div><div><label className="text-sm">A/E OIL</label><input type="text" className={getInputClassName('robAEOIL' as any, true)} value={'N/A'} readOnly /></div><div><label className="text-sm">VOL OIL</label><input type="text" className={getInputClassName('robVOLOIL' as any, true)} value={'N/A'} readOnly /></div></div></div>
+            {/* Main Engine Consumption */}
+            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Main Engine Consumption</h4><div className="space-y-2">
+              <FormField name="meLSIFO" label="LSIFO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="meLSMGO" label="LSMGO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="meCYLOIL" label="CYL OIL" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="meMEOIL" label="M/E OIL" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="meAEOIL" label="A/E OIL" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+            </div></div>
+            {/* Boiler Consumption */}
+            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Boiler Consumption</h4><div className="space-y-2">
+              <FormField name="boilerLSIFO" label="LSIFO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="boilerLSMGO" label="LSMGO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+            </div></div>
+            {/* Aux Consumption */}
+            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Aux Consumption</h4><div className="space-y-2">
+              <FormField name="auxLSIFO" label="LSIFO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="auxLSMGO" label="LSMGO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} isRequired labelClassName="text-sm" wrapperClassName="mb-0" />
+            </div></div>
+            {/* Bunker Supply (Optional) */}
+            <div className="bg-gray-50 p-4 rounded"><h4 className="font-semibold mb-2">Bunker Supply (Optional)</h4><div className="space-y-2">
+              <FormField name="supplyLSIFO" label="LSIFO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="supplyLSMGO" label="LSMGO" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="supplyCYLOIL" label="CYL OIL" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="supplyMEOIL" label="M/E OIL" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="supplyAEOIL" label="A/E OIL" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} labelClassName="text-sm" wrapperClassName="mb-0" />
+              <FormField name="supplyVOLOIL" label="VOL OIL" type="text" inputMode="decimal" register={register} errors={errors} control={control} validationPattern={POSITIVE_DECIMAL_ONLY} labelClassName="text-sm" wrapperClassName="mb-0" />
+            </div></div>
+            {/* Steaming Consumption (Read Only) - Use Component */}
+            <SteamingConsumptionDisplay
+              lsifo={watch('steamingLSIFO')}
+              lsmgo={watch('steamingLSMGO')}
+              cylOil={watch('steamingCYLOIL')}
+              meOil={watch('steamingMEOIL')}
+              aeOil={watch('steamingAEOIL')}
+              volOil={watch('steamingVOLOIL')}
+            />
+            {/* Bunker ROB - Use Component */}
+            <BunkerRobDisplay
+              lsifo={watch('robLSIFO')}
+              lsmgo={watch('robLSMGO')}
+              cylOil={watch('robCYLOIL')}
+              meOil={watch('robMEOIL')}
+              aeOil={watch('robAEOIL')}
+              volOil={watch('robVOLOIL')}
+            />
           </div>
-           <div><label className="block text-sm font-medium mb-1">Chief Engineer Remarks (Bunker)</label><textarea name="bunkerChiefEngineerRemarks" value={formData.bunkerChiefEngineerRemarks} onChange={handleChange} className={`${getInputClassName('bunkerChiefEngineerRemarks')} h-24`} placeholder="Optional remarks..."></textarea>{renderError('bunkerChiefEngineerRemarks')}</div>
+           {/* Bunker Remarks */}
+           <FormField name="bunkerChiefEngineerRemarks" label="Chief Engineer Remarks (Bunker)" type="textarea" register={register} errors={errors} placeholder="Optional remarks..." />
         </div>
 
-        {/* --- Engine/Machinery Section --- Connected */}
-        <div className="mb-6">
-          <h3 className="font-bold border-b pb-2 mb-4">Engine/Machinery Data</h3>
-          <div className="bg-gray-50 p-4 rounded mb-4"><h4 className="font-semibold mb-2">Main Engine Parameters</h4><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"><div><label className="text-sm">FO Pressure <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadFOPressure" value={formData.engineLoadFOPressure} onChange={handleChange} className={getInputClassName('engineLoadFOPressure')} />{renderError('engineLoadFOPressure')}</div><div><label className="text-sm">Lub Oil Pressure <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadLubOilPressure" value={formData.engineLoadLubOilPressure} onChange={handleChange} className={getInputClassName('engineLoadLubOilPressure')} />{renderError('engineLoadLubOilPressure')}</div><div><label className="text-sm">FW Inlet Temp <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadFWInletTemp" value={formData.engineLoadFWInletTemp} onChange={handleChange} className={getInputClassName('engineLoadFWInletTemp')} />{renderError('engineLoadFWInletTemp')}</div><div><label className="text-sm">LO Inlet Temp <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadLOInletTemp" value={formData.engineLoadLOInletTemp} onChange={handleChange} className={getInputClassName('engineLoadLOInletTemp')} />{renderError('engineLoadLOInletTemp')}</div><div><label className="text-sm">Scavenge Air Temp <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadScavAirTemp" value={formData.engineLoadScavAirTemp} onChange={handleChange} className={getInputClassName('engineLoadScavAirTemp')} />{renderError('engineLoadScavAirTemp')}</div><div><label className="text-sm">TC RPM #1 <span className="text-red-500">*</span></label><input type="text" inputMode="numeric" name="engineLoadTCRPM1" value={formData.engineLoadTCRPM1} onChange={handleChange} className={getInputClassName('engineLoadTCRPM1')} />{renderError('engineLoadTCRPM1')}</div><div><label className="text-sm">TC RPM #2</label><input type="text" inputMode="numeric" name="engineLoadTCRPM2" value={formData.engineLoadTCRPM2} onChange={handleChange} className={getInputClassName('engineLoadTCRPM2')} />{renderError('engineLoadTCRPM2')}</div><div><label className="text-sm">TC Exhaust Temp In <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadTCExhTempIn" value={formData.engineLoadTCExhTempIn} onChange={handleChange} className={getInputClassName('engineLoadTCExhTempIn')} />{renderError('engineLoadTCExhTempIn')}</div><div><label className="text-sm">TC Exhaust Temp Out <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadTCExhTempOut" value={formData.engineLoadTCExhTempOut} onChange={handleChange} className={getInputClassName('engineLoadTCExhTempOut')} />{renderError('engineLoadTCExhTempOut')}</div><div><label className="text-sm">Thrust Bearing Temp <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadThrustBearingTemp" value={formData.engineLoadThrustBearingTemp} onChange={handleChange} className={getInputClassName('engineLoadThrustBearingTemp')} />{renderError('engineLoadThrustBearingTemp')}</div><div><label className="text-sm">Daily Run Hour <span className="text-red-500">*</span></label><input type="text" inputMode="decimal" name="engineLoadDailyRunHour" value={formData.engineLoadDailyRunHour} onChange={handleChange} className={getInputClassName('engineLoadDailyRunHour')} />{renderError('engineLoadDailyRunHour')}</div></div></div>
-           <div className="bg-gray-50 p-4 rounded mb-4 overflow-x-auto"><h4 className="font-semibold mb-2">Engine Units</h4><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-100"><tr><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Unit #</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Exhaust Temp <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Under Piston Air <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">P.C.O Outlet <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">J.C.F.W Outlet Temp <span className="text-red-500">*</span></th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{[1, 2, 3, 4, 5, 6, 7, 8].map(unitNum => { const isOptional = unitNum > 6; const exhaustTempName = `engineUnit${unitNum}ExhaustTemp` as keyof BerthReportFormData; const underPistonAirName = `engineUnit${unitNum}UnderPistonAir` as keyof BerthReportFormData; const pcoOutletName = `engineUnit${unitNum}PCOOutlet` as keyof BerthReportFormData; const jcfwOutletTempName = `engineUnit${unitNum}JCFWOutletTemp` as keyof BerthReportFormData; return (<tr key={unitNum}><td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">Unit #{unitNum} {isOptional && '(Optional)'}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={exhaustTempName} value={formData[exhaustTempName]} onChange={handleChange} className={getInputClassName(exhaustTempName)} />{renderError(exhaustTempName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={underPistonAirName} value={formData[underPistonAirName]} onChange={handleChange} className={getInputClassName(underPistonAirName)} />{renderError(underPistonAirName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={pcoOutletName} value={formData[pcoOutletName]} onChange={handleChange} className={getInputClassName(pcoOutletName)} />{renderError(pcoOutletName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={jcfwOutletTempName} value={formData[jcfwOutletTempName]} onChange={handleChange} className={getInputClassName(jcfwOutletTempName)} />{renderError(jcfwOutletTempName)}</td></tr>);})}</tbody></table></div>
-            <div className="bg-gray-50 p-4 rounded mb-4 overflow-x-auto"><h4 className="font-semibold mb-2">Auxiliary Engines</h4><table className="min-w-full divide-y divide-gray-200"><thead className="bg-gray-100"><tr><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">A/E#</th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Load <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">KW <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">FO Press <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lub Oil Press <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Water Temp <span className="text-red-500">*</span></th><th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Daily Run Hour <span className="text-red-500">*</span></th></tr></thead><tbody className="bg-white divide-y divide-gray-200">{['DG1', 'DG2', 'DG3', 'V1'].map(aeId => { const isOptional = aeId !== 'DG1'; const loadName = `auxEngine${aeId}Load` as keyof BerthReportFormData; const kwName = `auxEngine${aeId}KW` as keyof BerthReportFormData; const foPressName = `auxEngine${aeId}FOPress` as keyof BerthReportFormData; const lubOilPressName = `auxEngine${aeId}LubOilPress` as keyof BerthReportFormData; const waterTempName = `auxEngine${aeId}WaterTemp` as keyof BerthReportFormData; const dailyRunHourName = `auxEngine${aeId}DailyRunHour` as keyof BerthReportFormData; return (<tr key={aeId}><td className="px-4 py-2 whitespace-nowrap text-sm font-medium text-gray-900">{aeId} {isOptional && '(Optional)'}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={loadName} value={formData[loadName]} onChange={handleChange} className={getInputClassName(loadName)} />{renderError(loadName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={kwName} value={formData[kwName]} onChange={handleChange} className={getInputClassName(kwName)} />{renderError(kwName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={foPressName} value={formData[foPressName]} onChange={handleChange} className={getInputClassName(foPressName)} />{renderError(foPressName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={lubOilPressName} value={formData[lubOilPressName]} onChange={handleChange} className={getInputClassName(lubOilPressName)} />{renderError(lubOilPressName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={waterTempName} value={formData[waterTempName]} onChange={handleChange} className={getInputClassName(waterTempName)} />{renderError(waterTempName)}</td><td className="px-4 py-2"><input type="text" inputMode="decimal" name={dailyRunHourName} value={formData[dailyRunHourName]} onChange={handleChange} className={getInputClassName(dailyRunHourName)} />{renderError(dailyRunHourName)}</td></tr>);})}</tbody></table></div>
-           <div><label className="block text-sm font-medium mb-1">Chief Engineer Remarks (Engine)</label><textarea name="engineChiefEngineerRemarks" value={formData.engineChiefEngineerRemarks} onChange={handleChange} className={`${getInputClassName('engineChiefEngineerRemarks')} h-24`} placeholder="Optional remarks..."></textarea>{renderError('engineChiefEngineerRemarks')}</div>
-        </div>
+        {/* --- Engine/Machinery Section --- Replaced with component */}
+        <EngineMachinerySection<ProcessedBerthFormData>
+          register={register}
+          errors={errors}
+          control={control}
+        />
 
       {/* Form Actions */}
       <div className="flex justify-end space-x-2 mt-8">
@@ -325,18 +444,19 @@ const BerthReportForm: React.FC<BerthReportFormProps> = ({ onSubmit, onCancel })
           type="button"
           className="px-4 py-2 border rounded hover:bg-gray-100 transition-colors"
           onClick={onCancel}
+          disabled={isSubmitting} // Use RHF isSubmitting
         >
           Cancel
         </button>
         <button
-          type="submit"
+          type="submit" // Keep type as submit
           className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors disabled:opacity-50"
-          disabled={isSubmitting}
+          disabled={isSubmitting} // Use RHF isSubmitting
         >
           {isSubmitting ? 'Submitting...' : 'Submit Berth Report'}
         </button>
       </div>
-      </form>
+      </form> {/* Ensure closing form tag */}
     </div>
   );
 };
